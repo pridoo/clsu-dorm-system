@@ -8,7 +8,7 @@ import { motion } from 'framer-motion';
 import { useState, useEffect } from 'react';
 import { auth, db } from '@/lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, getDoc, getDocs } from 'firebase/firestore';
 
 export default function ManagerDashboard() {
   const [managerInfo, setManagerInfo] = useState({ name: "Loading...", building: "Scanning..." });
@@ -20,6 +20,7 @@ export default function ManagerDashboard() {
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
+        // 1. Get Manager's Data
         const userDoc = await getDoc(doc(db, "users", user.uid));
         if (userDoc.exists()) {
           const userData = userDoc.data();
@@ -29,32 +30,50 @@ export default function ManagerDashboard() {
             building: building 
           });
 
-          const qAlloc = query(collection(db, "allocations"), where("dormGroup", "==", building));
-          const unsubAlloc = onSnapshot(qAlloc, async (snap) => {
+          // 2. Listen to ALL Residents assigned to this building
+          // Kahit wala pang allocation (kwarto), dapat makita sila rito
+          const qResidents = query(
+            collection(db, "residents"), 
+            where("assigned_building", "==", building)
+          );
+
+          const unsubRes = onSnapshot(qResidents, async (resSnap) => {
             const fullData: any[] = [];
-            for (const alloc of snap.docs) {
-              const resDoc = await getDoc(doc(db, "residents", alloc.data().studentID));
-              if (resDoc.exists()) {
-                fullData.push({
-                  id: alloc.data().studentID,
-                  ...resDoc.data(),
-                  room: alloc.data().roomID.split('-').pop(),
-                  status: "Verified"
-                });
-              }
-            }
+            let unassignedCount = 0;
+
+            // Fetch allocations to map rooms
+            const allocSnap = await getDocs(collection(db, "allocations"));
+            const allocMap = new Map();
+            allocSnap.forEach(a => allocMap.set(a.data().studentID, a.data()));
+
+            resSnap.forEach((res) => {
+              const resData = res.data();
+              const allocation = allocMap.get(res.id);
+
+              if (!allocation) unassignedCount++;
+
+              fullData.push({
+                id: res.id,
+                ...resData,
+                room: allocation ? allocation.roomID.split('-').pop() : "NONE",
+                status: allocation ? "Verified" : "Pending Room"
+              });
+            });
+
             setResidents(fullData);
 
+            // 3. Stats Calculation
             const capacity = 160; 
             setStats({
               total: fullData.length,
-              vacant: capacity - fullData.length,
-              unassigned: 0,
-              load: Math.round((fullData.length / capacity) * 100)
+              vacant: capacity - (fullData.length - unassignedCount),
+              unassigned: unassignedCount,
+              load: Math.round(((fullData.length - unassignedCount) / capacity) * 100)
             });
             setLoading(false);
           });
-          return () => unsubAlloc();
+
+          return () => unsubRes();
         }
       }
     });
@@ -73,7 +92,6 @@ export default function ManagerDashboard() {
       <main className="flex-1 flex flex-col overflow-hidden bg-white border border-slate-300 shadow-[0_0_50px_rgba(0,0,0,0.08)] rounded-[45px] relative">
         <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-emerald-500/[0.03] blur-[120px] -z-10 rounded-full" />
 
-        {/* Top Header Section */}
         <nav className="h-24 px-10 flex items-center justify-between border-b border-slate-200 bg-white/80 backdrop-blur-md relative z-20 flex-shrink-0">
           <div className="space-y-0.5 text-left">
             <div className="flex items-center gap-2">
@@ -109,32 +127,30 @@ export default function ManagerDashboard() {
           </div>
         </nav>
 
-        {/* Stats Grid */}
         <div className="px-10 py-8 grid grid-cols-4 gap-6 bg-[#f8fafc]/30 relative z-10 flex-shrink-0">
-          <ManagerStatCard label="Residents" value={stats.total.toString()} sub="Verified" icon={<Users size={18}/>} color="emerald" glow="shadow-emerald-200/50" />
+          <ManagerStatCard label="Residents" value={stats.total.toString()} sub="Total Registered" icon={<Users size={18}/>} color="emerald" glow="shadow-emerald-200/50" />
           <ManagerStatCard label="Vacant" value={stats.vacant.toString()} sub="Beds" icon={<DoorOpen size={18}/>} color="blue" glow="shadow-blue-200/50" />
           <ManagerStatCard label="Unassigned" value={stats.unassigned.toString()} sub="No Room" icon={<UserMinus size={18}/>} color="amber" glow="shadow-amber-200/50" />
           
           <motion.div whileHover={{ y: -6, scale: 1.01 }} className="bg-emerald-950 rounded-[35px] p-6 text-white relative overflow-hidden group shadow-2xl shadow-emerald-900/40 border border-emerald-800">
-             <div className="relative z-10 h-full flex flex-col justify-between text-left">
-               <div>
-                  <p className="text-[9px] font-black text-emerald-400 uppercase tracking-widest mb-1 italic leading-none">Building Load</p>
+              <div className="relative z-10 h-full flex flex-col justify-between text-left">
+                <div>
+                  <p className="text-[9px] font-black text-emerald-400 uppercase tracking-widest mb-1 italic leading-none">Occupancy Load</p>
                   <h3 className="text-4xl font-extralight italic tracking-tighter leading-none mt-1">{stats.load}%</h3>
-               </div>
-               <div className="flex items-center gap-2 mt-4">
+                </div>
+                <div className="flex items-center gap-2 mt-4">
                   <Zap size={12} className="text-amber-400 fill-amber-400" />
                   <span className="text-[9px] font-black uppercase tracking-[0.2em] text-emerald-100">Live Sync</span>
-               </div>
-             </div>
-             <ArrowUpRight className="absolute top-6 right-6 text-emerald-500/20 group-hover:text-emerald-400 transition-all" size={24} />
+                </div>
+              </div>
+              <ArrowUpRight className="absolute top-6 right-6 text-emerald-500/20 group-hover:text-emerald-400 transition-all" size={24} />
           </motion.div>
         </div>
 
-        {/* Resident Registry Table Area - Seamless Design */}
         <div className="flex-1 px-10 pb-10 bg-[#f8fafc]/30 flex flex-col relative z-10 overflow-hidden">
           <div className="flex items-center justify-between mb-6 px-1">
              <div className="flex items-center gap-4 text-left">
-                <h2 className="text-[10px] font-black text-slate-800 uppercase tracking-[0.4em] italic leading-none">Resident Registry</h2>
+                <h2 className="text-[10px] font-black text-slate-800 uppercase tracking-[0.4em] italic leading-none">Master Registry</h2>
                 <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.8)] animate-pulse" />
              </div>
              <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-xl border border-slate-300 shadow-sm focus-within:border-emerald-500 transition-all w-64 text-left">
@@ -156,7 +172,7 @@ export default function ManagerDashboard() {
                   <tr>
                     <th className="px-10 py-6 text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 italic">Identity Profile</th>
                     <th className="px-6 py-6 text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 text-center italic">Room Assignment</th>
-                    <th className="px-10 py-6 text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 text-right italic">Status</th>
+                    <th className="px-10 py-6 text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 text-right italic">Registry Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
@@ -172,7 +188,7 @@ export default function ManagerDashboard() {
                   ) : filteredResidents.length === 0 ? (
                     <tr>
                       <td colSpan={3} className="py-24 text-center">
-                        <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest italic font-sans">No active residents detected</p>
+                        <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest italic font-sans">No records found for this building</p>
                       </td>
                     </tr>
                   ) : (
@@ -181,20 +197,22 @@ export default function ManagerDashboard() {
                         <td className="px-10 py-5">
                           <div className="flex items-center gap-5">
                               <div className="w-11 h-11 rounded-[16px] bg-slate-100 border border-slate-200 flex items-center justify-center text-[13px] font-black text-emerald-900 group-hover:bg-white group-hover:border-emerald-300 transition-all uppercase shadow-inner italic">
-                                {student.first_name[0]}
+                                {student.first_name?.[0] || "?"}
                               </div>
                               <div className="text-left">
                                 <p className="text-[15px] font-bold text-slate-800 tracking-tight leading-none mb-1.5 uppercase italic">{student.first_name} {student.last_name}</p>
-                                <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest italic font-sans">{student.id} • {student.course}</p>
+                                <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest italic font-sans">{student.student_id} • {student.course}</p>
                               </div>
                           </div>
                         </td>
                         <td className="px-6 py-5 text-center">
-                           <span className="text-[11px] font-black italic px-5 py-2 rounded-2xl border border-slate-200 bg-slate-50 text-slate-700 shadow-sm font-sans">Room {student.room}</span>
+                            <span className={`text-[11px] font-black italic px-5 py-2 rounded-2xl border ${student.room === "NONE" ? 'bg-rose-50 border-rose-100 text-rose-400' : 'bg-slate-50 border-slate-200 text-slate-700'} shadow-sm font-sans`}>
+                              {student.room === "NONE" ? 'UNASSIGNED' : `Room ${student.room}`}
+                            </span>
                         </td>
                         <td className="px-10 py-5 text-right">
-                           <div className="inline-flex items-center gap-2.5 text-[10px] font-black uppercase tracking-widest text-emerald-600 italic">
-                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]" />
+                           <div className={`inline-flex items-center gap-2.5 text-[10px] font-black uppercase tracking-widest italic ${student.status === "Verified" ? 'text-emerald-600' : 'text-amber-500'}`}>
+                              <div className={`w-1.5 h-1.5 rounded-full shadow-[0_0_10px] ${student.status === "Verified" ? 'bg-emerald-500 shadow-emerald-500/80' : 'bg-amber-400 shadow-amber-400/80 animate-pulse'}`} />
                               {student.status}
                            </div>
                         </td>
