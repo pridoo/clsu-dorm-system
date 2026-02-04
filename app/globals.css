@@ -1,26 +1,52 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  --color-clsu-emerald: #064e3b;
+  --color-clsu-gold: #f59e0b;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  body {
+    background-color: #f1f5f9;
+    @apply antialiased text-slate-600 tracking-tight overflow-hidden h-screen w-screen;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer components {
+  /* The Floating Dashboard Container Shell */
+  .main-shell {
+    @apply bg-white rounded-[48px] shadow-[0_20px_80px_-20px_rgba(0,0,0,0.08)] border border-white flex flex-col h-full overflow-hidden;
+  }
+
+  /* RECTANGULAR CARD: No more aspect-square to avoid breaking layout */
+  .dorm-card {
+    @apply bg-slate-50/50 rounded-[35px] border-2 border-slate-100 shadow-sm transition-all duration-500 flex flex-col p-8 min-h-[220px] relative overflow-hidden;
+  }
+
+  .dorm-card:hover {
+    @apply bg-white shadow-2xl shadow-slate-200/60 -translate-y-2 border-emerald-500/30;
+  }
+
+  /* Sector Identity Colors */
+  .sector-blue { @apply border-blue-100/50 hover:border-blue-400; }
+  .sector-rose { @apply border-rose-100/50 hover:border-rose-400; }
+
+  /* Internal Scrollbar */
+  .internal-scroll {
+    @apply overflow-y-auto pr-4;
+    scrollbar-width: thin;
+  }
+
+  .internal-scroll::-webkit-scrollbar { width: 4px; }
+  .internal-scroll::-webkit-scrollbar-thumb { @apply bg-slate-200 rounded-full hover:bg-emerald-500 transition-colors; }
+
+  /* The Room Node: Rectangular and clean */
+  .room-node {
+    @apply bg-white border border-slate-100 rounded-[24px] p-6 shadow-sm transition-all duration-500 hover:shadow-xl hover:-translate-y-1;
+  }
+
+  /* Bed Status Indicator */
+  .bed-dot {
+    @apply h-3 w-3 rounded-full border-2 transition-all duration-300;
+  }
 }
