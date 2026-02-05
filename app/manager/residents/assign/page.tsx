@@ -20,6 +20,7 @@ export default function AssignRoomPage() {
   const [loading, setLoading] = useState(true);
   const [isDirty, setIsDirty] = useState(false);
   const [showExitModal, setShowExitModal] = useState(false);
+  const [activeTerm, setActiveTerm] = useState<any>(null);
 
   // Drag/Selection States
   const [selectedUser, setSelectedUser] = useState<any>(null);
@@ -28,11 +29,18 @@ export default function AssignRoomPage() {
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        const userDoc = await getDoc(doc(db, "users", user.uid));
-        if (userDoc.exists()) {
+        // 1. Get Manager Building and Active System Config
+        const [userDoc, configSnap] = await Promise.all([
+          getDoc(doc(db, "users", user.uid)),
+          getDoc(doc(db, "system", "config"))
+        ]);
+
+        if (userDoc.exists() && configSnap.exists()) {
           const buildingGroup = userDoc.data().assigned_building;
+          const config = configSnap.data();
+          setActiveTerm(config);
           
-          // 1. Fetch Rooms and sort them by Building ID then Room Number
+          // 2. Fetch Rooms for this building group
           const qRooms = query(collection(db, "rooms"), where("dormGroup", "==", buildingGroup));
           const roomsSnap = await getDocs(qRooms);
           const initialRooms = roomsSnap.docs.map(d => ({ 
@@ -44,17 +52,23 @@ export default function AssignRoomPage() {
             return parseInt(a.room_number) - parseInt(b.room_number);
           });
 
-          // 2. Real-time sync for Residents and Allocations
-          const unsubData = onSnapshot(collection(db, "residents"), async (resSnap) => {
-            const allResidents = resSnap.docs.map(d => {
-              const data = d.data() as any;
-              return { 
-                id: d.id, 
-                ...data, 
-                initial: data.first_name ? data.first_name[0] : '?' 
-              };
-            });
-            
+          // 3. Real-time sync for Residents (STRICT: Building + Term + Not Archived)
+          const qResidents = query(
+            collection(db, "residents"),
+            where("assigned_building", "==", buildingGroup),
+            where("isArchived", "==", false),
+            where("registered_academic_year_label", "==", config.academicYear),
+            where("registered_semester_label", "==", config.semester)
+          );
+
+          const unsubData = onSnapshot(qResidents, async (resSnap) => {
+            const currentTermResidents = resSnap.docs.map(d => ({
+              id: d.id,
+              ...d.data(),
+              initial: (d.data() as any).first_name?.[0] || '?'
+            }));
+
+            // Fetch Allocations (Filtered by current term if necessary, or check map)
             const allocSnap = await getDocs(collection(db, "allocations"));
             const allocMap = new Map();
             allocSnap.forEach(a => allocMap.set(a.data().studentID, a.data().roomID));
@@ -62,12 +76,12 @@ export default function AssignRoomPage() {
             const queue: any[] = [];
             const updatedRooms = JSON.parse(JSON.stringify(initialRooms));
 
-            allResidents.forEach((res: any) => {
+            currentTermResidents.forEach((res: any) => {
               const roomId = allocMap.get(res.id);
               if (roomId) {
                 const roomObj = updatedRooms.find((r: any) => r.db_id === roomId);
                 if (roomObj) roomObj.occupants.push(res);
-              } else if (res.assigned_building === buildingGroup) {
+              } else {
                 queue.push(res);
               }
             });
@@ -83,6 +97,7 @@ export default function AssignRoomPage() {
     return () => unsubAuth();
   }, []);
 
+  // Exit Guard
   useEffect(() => {
     const handleAnchorClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
@@ -103,19 +118,22 @@ export default function AssignRoomPage() {
   };
 
   const handleSaveLayout = async () => {
+    if (!activeTerm) return;
     setLoading(true);
     const batch = writeBatch(db);
     
     rooms.forEach(room => {
       room.occupants.forEach((occ: any) => {
-        const allocId = `${occ.id}_2025-2026-2nd`;
+        // Unique ID per resident per term
+        const allocId = `${occ.id}_${activeTerm.academicYear}_${activeTerm.semester}`.replace(/\s+/g, '');
         const allocRef = doc(db, "allocations", allocId);
         batch.set(allocRef, {
           studentID: occ.id,
           roomID: room.db_id,
           dormID: room.dormID,
           dormGroup: room.dormGroup,
-          semesterID: "2025-2026-2nd",
+          academicYear: activeTerm.academicYear,
+          semester: activeTerm.semester,
           assignedAt: serverTimestamp()
         });
       });
@@ -125,7 +143,7 @@ export default function AssignRoomPage() {
       await batch.commit();
       setIsDirty(false);
       setShowExitModal(false);
-      alert("Database Synchronized! 🚀");
+      alert("Allocation Plan Synchronized! 🚀");
     } catch (err: any) {
       alert("Error saving: " + err.message);
     } finally {
@@ -133,6 +151,7 @@ export default function AssignRoomPage() {
     }
   };
 
+  // Drag logic
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => setMousePos({ x: e.clientX, y: e.clientY });
     if (selectedUser) window.addEventListener('mousemove', handleMouseMove);
@@ -178,7 +197,6 @@ export default function AssignRoomPage() {
   const totalBeds = rooms.reduce((acc, curr) => acc + (curr.total_beds || 8), 0);
   const occupancyRate = totalBeds > 0 ? Math.round((occupiedBeds / totalBeds) * 100) : 0;
 
-  // Group rooms by Dorm ID (e.g. MD4, MD5)
   const groupedRooms = rooms.reduce((groups: any, room) => {
     const dorm = room.dormID;
     if (!groups[dorm]) groups[dorm] = [];
@@ -187,7 +205,7 @@ export default function AssignRoomPage() {
   }, {});
 
   return (
-    <div className="flex h-screen w-screen bg-[#f1f5f9] p-6 gap-6 overflow-hidden text-left font-sans cursor-default text-slate-900">
+    <div className="flex h-screen w-screen bg-[#f1f5f9] p-6 gap-6 overflow-hidden text-left font-sans cursor-default text-slate-900 leading-none">
       <Sidebar />
       
       <AnimatePresence>
@@ -197,10 +215,10 @@ export default function AssignRoomPage() {
             initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
           >
             <div className="p-4 bg-emerald-600 text-white rounded-[24px] shadow-2xl flex items-center gap-4 border-2 border-white/20 backdrop-blur-md">
-              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-[10px] font-black">{selectedUser.initial}</div>
-              <div className="pr-4 text-left">
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-[10px] font-black leading-none">{selectedUser.initial}</div>
+              <div className="pr-4 text-left leading-none">
                 <p className="text-[10px] font-bold leading-none uppercase">{selectedUser.first_name} {selectedUser.last_name}</p>
-                <p className="text-[8px] opacity-70 uppercase font-black tracking-tighter italic">Relocating...</p>
+                <p className="text-[8px] opacity-70 uppercase font-black tracking-tighter italic leading-none mt-1">Relocating...</p>
               </div>
             </div>
           </motion.div>
@@ -208,70 +226,70 @@ export default function AssignRoomPage() {
       </AnimatePresence>
 
       <LayoutGroup>
-      <main className="flex-1 flex flex-col overflow-hidden bg-white border border-slate-300 shadow-[0_0_50px_rgba(0,0,0,0.08)] rounded-[45px] relative text-left">
-        <nav className="h-24 px-10 flex items-center justify-between border-b border-slate-200 bg-white/80 backdrop-blur-md z-30">
-          <div className="flex items-center gap-6 text-left">
+      <main className="flex-1 flex flex-col overflow-hidden bg-white border border-slate-300 shadow-[0_0_50px_rgba(0,0,0,0.08)] rounded-[45px] relative text-left leading-none">
+        <nav className="h-24 px-10 flex items-center justify-between border-b border-slate-200 bg-white/80 backdrop-blur-md z-30 leading-none">
+          <div className="flex items-center gap-6 text-left leading-none">
             <button onClick={handleBack} className="p-3 hover:bg-slate-50 rounded-2xl border border-slate-100 transition-all active:scale-90">
               <ChevronLeft size={20} className="text-slate-400" />
             </button>
-            <div className="space-y-0.5 text-left">
+            <div className="space-y-0.5 text-left leading-none">
               <p className="text-[10px] font-black text-emerald-600 uppercase tracking-[0.4em] leading-none italic">Allocation Engine</p>
-              <h1 className="text-3xl font-extralight text-slate-900 tracking-tighter leading-none italic">Floor Plan <span className="font-bold text-emerald-950 not-italic tracking-tight">Assignment</span></h1>
+              <h1 className="text-3xl font-extralight text-slate-900 tracking-tighter leading-none italic">Term <span className="font-bold text-emerald-950 not-italic tracking-tight">Assignment</span></h1>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-8 bg-slate-50 px-8 py-3 rounded-[24px] border border-slate-200 shadow-inner">
-               <div className="text-left">
-                  <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">Building Occupancy</p>
-                  <div className="flex items-center gap-3">
+          <div className="flex items-center gap-4 leading-none">
+            <div className="flex items-center gap-8 bg-slate-50 px-8 py-3 rounded-[24px] border border-slate-200 shadow-inner leading-none">
+               <div className="text-left leading-none">
+                  <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5 italic">Sync: {activeTerm?.academicYear}</p>
+                  <div className="flex items-center gap-3 leading-none">
                      <span className="text-xl font-black text-slate-800 italic">{occupancyRate}%</span>
                      <div className="w-24 h-1.5 bg-slate-200 rounded-full overflow-hidden">
                         <motion.div animate={{ width: `${occupancyRate}%` }} className="h-full bg-emerald-500 rounded-full" />
                      </div>
-                     <span className="text-[10px] font-black text-emerald-600 uppercase italic">{occupiedBeds}/{totalBeds} BEDS</span>
+                     <span className="text-[10px] font-black text-emerald-600 uppercase italic leading-none">{occupiedBeds}/{totalBeds} BEDS</span>
                   </div>
                </div>
                <div className="h-8 w-[1px] bg-slate-200" />
                <button 
                 onClick={handleSaveLayout}
                 disabled={!isDirty || loading}
-                className="flex items-center gap-3 bg-emerald-950 text-white px-6 py-3 rounded-xl text-[9px] font-black uppercase tracking-[0.2em] shadow-xl shadow-emerald-950/30 hover:scale-105 active:scale-95 transition-all disabled:opacity-30"
+                className="flex items-center gap-3 bg-emerald-950 text-white px-6 py-3 rounded-xl text-[9px] font-black uppercase tracking-[0.2em] shadow-xl shadow-emerald-950/30 hover:scale-105 active:scale-95 transition-all disabled:opacity-30 leading-none"
                >
-                 {loading ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} 
-                 {loading ? "Syncing..." : "Save Layout"}
+                  {loading ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} 
+                  {loading ? "Syncing..." : "Sync Layout"}
                </button>
             </div>
           </div>
         </nav>
 
-        <div className="flex-1 flex overflow-hidden bg-[#f8fafc]/40 text-left">
+        <div className="flex-1 flex overflow-hidden bg-[#f8fafc]/40 text-left leading-none">
           <aside 
             onClick={handleReturnToQueue}
-            className={`w-80 border-r border-slate-200 p-8 flex flex-col relative z-20 transition-colors ${selectedUser ? 'bg-emerald-50/30 cursor-pointer hover:bg-emerald-50' : 'bg-white'}`}
+            className={`w-80 border-r border-slate-200 p-8 flex flex-col relative z-20 transition-colors leading-none ${selectedUser ? 'bg-emerald-50/30 cursor-pointer hover:bg-emerald-50' : 'bg-white'}`}
           >
-             <div className="flex items-center justify-between mb-8 px-2 text-left">
-                <div className="flex items-center gap-2 text-left">
+             <div className="flex items-center justify-between mb-8 px-2 text-left leading-none">
+                <div className="flex items-center gap-2 text-left leading-none">
                    <div className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                   <p className="text-[10px] font-black text-slate-900 uppercase tracking-widest italic">Unassigned Queue</p>
+                   <p className="text-[10px] font-black text-slate-900 uppercase tracking-widest italic">Pending Residents</p>
                 </div>
                 <Users size={14} className="text-slate-300" />
              </div>
 
-             <div className="flex-1 space-y-3 overflow-y-auto internal-scroll pr-2 text-left">
+             <div className="flex-1 space-y-3 overflow-y-auto internal-scroll pr-2 text-left leading-none">
                 <AnimatePresence mode="popLayout">
                   {pendingResidents.map((student) => (
                     <motion.div 
                       key={student.id} layout
                       onClick={(e) => { e.stopPropagation(); handleSelectFromQueue(student); }}
-                      className={`p-4 rounded-[28px] border-2 flex items-center gap-4 cursor-pointer transition-all ${
+                      className={`p-4 rounded-[28px] border-2 flex items-center gap-4 cursor-pointer transition-all leading-none ${
                         selectedUser?.id === student.id ? 'bg-emerald-50 border-emerald-500 shadow-md scale-[0.98]' : 'bg-white border-slate-100 hover:border-emerald-300'
                       }`}
                     >
-                      <div className={`w-9 h-9 rounded-2xl flex items-center justify-center text-[11px] font-black ${selectedUser?.id === student.id ? 'bg-emerald-500 text-white' : 'bg-slate-50 text-slate-400'}`}>
+                      <div className={`w-9 h-9 rounded-2xl flex items-center justify-center text-[11px] font-black leading-none ${selectedUser?.id === student.id ? 'bg-emerald-500 text-white' : 'bg-slate-50 text-slate-400'}`}>
                         {student.initial}
                       </div>
-                      <div className="text-left flex-1">
+                      <div className="text-left flex-1 leading-none">
                         <p className="text-xs font-bold text-slate-800 leading-none mb-1 uppercase">{student.first_name} {student.last_name}</p>
                         <p className="text-[9px] font-black text-slate-300 uppercase italic leading-none">{student.course} • {student.year_level}</p>
                       </div>
@@ -280,66 +298,60 @@ export default function AssignRoomPage() {
                 </AnimatePresence>
              </div>
 
-             <div className="mt-8 p-5 bg-emerald-50/50 rounded-[32px] border border-emerald-100/50">
+             <div className="mt-8 p-5 bg-emerald-50/50 rounded-[32px] border border-emerald-100/50 leading-none text-left">
                 <p className="text-[9px] font-black text-emerald-800 uppercase tracking-widest leading-none italic mb-2">Smart Assist</p>
                 <p className="text-[10px] text-emerald-700/60 font-medium italic leading-relaxed text-left">
-                  {selectedUser ? "Click here to return resident to queue." : "Click a resident to move them."}
+                  {selectedUser ? "Click here to return resident to queue." : "Select a resident and click a room slot."}
                 </p>
              </div>
           </aside>
 
-          <div className="flex-1 p-12 overflow-y-auto internal-scroll relative text-left">
-              <div className="max-w-6xl mx-auto space-y-20">
+          <div className="flex-1 p-12 overflow-y-auto internal-scroll relative text-left leading-none">
+              <div className="max-w-6xl mx-auto space-y-20 leading-none">
                 {Object.keys(groupedRooms).map((dormId) => (
-                  <div key={dormId} className="space-y-8">
-                    {/* SECTION HEADER FOR THE DORM BUILDING */}
-                    <div className="flex items-center gap-6">
-                      <div className="flex items-center gap-3">
+                  <div key={dormId} className="space-y-8 leading-none text-left">
+                    <div className="flex items-center gap-6 leading-none">
+                      <div className="flex items-center gap-3 leading-none">
                         <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.4)]" />
-                        <h2 className="text-lg font-black uppercase tracking-[0.4em] text-[#022c22] italic">
-                          {dormId === "MD4" ? "Men's Dorm 4" : 
-                           dormId === "MD5" ? "Men's Dorm 5" : 
-                           dormId === "LD5" ? "Ladies' Dorm 5" : dormId}
-                        </h2>
+                        <h2 className="text-lg font-black uppercase tracking-[0.4em] text-[#022c22] italic leading-none">{dormId} Building</h2>
                       </div>
                       <div className="h-[1px] flex-1 bg-slate-200" />
                     </div>
 
-                    {/* GRID OF ROOMS FOR THIS SPECIFIC DORM */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10 leading-none">
                       {groupedRooms[dormId].map((room: any) => (
                         <div 
                           key={room.db_id}
                           onClick={() => handleRoomClick(room.db_id)}
-                          className={`bg-white border-2 rounded-[50px] p-8 shadow-sm flex flex-col items-center justify-center relative transition-all min-h-[300px] cursor-pointer ${
+                          className={`bg-white border-2 rounded-[50px] p-8 shadow-sm flex flex-col items-center justify-center relative transition-all min-h-[300px] cursor-pointer leading-none ${
                             selectedUser && room.occupants.length < (room.total_beds || 8) ? 'border-emerald-500 bg-emerald-50/20 shadow-xl scale-[1.02]' : 'border-slate-200 hover:border-slate-300'
                           }`}
                         >
-                          <div className="text-center mb-8">
+                          <div className="text-center mb-8 leading-none">
                             <p className="text-[16px] font-black uppercase tracking-[0.1em] text-slate-800 italic leading-none">Room {room.room_number}</p>
                           </div>
 
-                          <div className="grid grid-cols-4 gap-4 relative z-10">
+                          <div className="grid grid-cols-4 gap-4 relative z-10 leading-none">
                             {[...Array(room.total_beds || 8)].map((_, idx) => {
                               const occupant = room.occupants[idx];
                               return (
-                                <div key={idx} className="relative group/avatar">
+                                <div key={idx} className="relative leading-none">
                                   <div 
                                     onClick={(e) => occupant && handleMoveFromRoom(e, room, occupant)}
-                                    className={`w-11 h-11 rounded-full border-2 flex items-center justify-center transition-all duration-500 ${
+                                    className={`w-11 h-11 rounded-full border-2 flex items-center justify-center transition-all duration-500 leading-none ${
                                       occupant ? 'bg-[#022c22] border-emerald-800 shadow-xl scale-105 cursor-pointer hover:bg-emerald-900' : 'border-slate-400 border-dashed bg-slate-100/50'
                                     }`}
                                   >
-                                    {occupant ? <span className="text-white font-black italic text-sm">{occupant.initial}</span> : <div className="w-1.5 h-1.5 rounded-full bg-slate-400/50" />}
+                                    {occupant ? <span className="text-white font-black italic text-sm leading-none">{occupant.initial}</span> : <div className="w-1.5 h-1.5 rounded-full bg-slate-400/50" />}
                                   </div>
                                 </div>
                               );
                             })}
                           </div>
                           
-                          <div className="absolute bottom-6 flex items-center gap-2 px-5 py-2 bg-white border border-slate-200 rounded-full shadow-sm">
-                            <div className={`w-1.5 h-1.5 rounded-full ${room.occupants.length === (room.total_beds || 8) ? 'bg-rose-500 animate-pulse' : 'bg-emerald-500'}`} />
-                            <p className="text-[9px] font-black text-slate-800 uppercase tracking-widest">{room.occupants.length}/{room.total_beds || 8} OCCUPANCY</p>
+                          <div className="absolute bottom-6 flex items-center gap-2 px-5 py-2 bg-white border border-slate-200 rounded-full shadow-sm leading-none">
+                            <div className={`w-1.5 h-1.5 rounded-full leading-none ${room.occupants.length === (room.total_beds || 8) ? 'bg-rose-500 animate-pulse' : 'bg-emerald-500'}`} />
+                            <p className="text-[9px] font-black text-slate-800 uppercase tracking-widest leading-none">{room.occupants.length}/{room.total_beds || 8} OCCUPANCY</p>
                           </div>
                         </div>
                       ))}
@@ -352,36 +364,35 @@ export default function AssignRoomPage() {
       </main>
       </LayoutGroup>
 
-      {/* Aesthetic Unsaved Changes Modal */}
+      {/* Unsaved Changes Modal */}
       <AnimatePresence>
         {showExitModal && (
-          <div className="fixed inset-0 z-[500] flex items-center justify-center p-6 text-left text-slate-900">
+          <div className="fixed inset-0 z-[500] flex items-center justify-center p-6 text-left text-slate-900 leading-none">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} 
               className="absolute inset-0 bg-slate-950/40 backdrop-blur-xl" onClick={() => setShowExitModal(false)} />
-            
             <motion.div 
               initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative bg-white w-full max-w-sm rounded-[45px] shadow-2xl overflow-hidden p-10 text-center border border-white/20"
+              className="relative bg-white w-full max-w-sm rounded-[45px] shadow-2xl overflow-hidden p-10 text-center border border-white/20 leading-none"
             >
-              <div className="w-20 h-20 bg-amber-50 rounded-[30px] flex items-center justify-center text-amber-500 mx-auto mb-6 shadow-inner">
+              <div className="w-20 h-20 bg-amber-50 rounded-[30px] flex items-center justify-center text-amber-500 mx-auto mb-6 shadow-inner leading-none">
                 <AlertTriangle size={40} />
               </div>
-              <h2 className="text-2xl font-bold text-slate-900 tracking-tight italic mb-2 leading-none">Save Progress?</h2>
+              <h2 className="text-2xl font-bold text-slate-900 tracking-tight italic mb-2 leading-none">Save Changes?</h2>
               <p className="text-[11px] text-slate-400 font-medium leading-relaxed mb-10 px-4 text-center">
-                You have modified the room layout. Moving away now will revert all residents to their previous assignments.
+                Unsaved room assignments will be lost. Term context: {activeTerm?.academicYear}.
               </p>
-              <div className="space-y-3 text-center">
+              <div className="space-y-3 text-center leading-none">
                 <button 
                   onClick={handleSaveLayout}
-                  className="w-full bg-emerald-950 text-white py-4 rounded-[22px] font-bold text-[10px] uppercase tracking-[0.2em] hover:bg-emerald-900 transition-all flex items-center justify-center gap-2 shadow-xl active:scale-95"
+                  className="w-full bg-emerald-950 text-white py-4 rounded-[22px] font-bold text-[10px] uppercase tracking-[0.2em] hover:bg-emerald-900 transition-all flex items-center justify-center gap-2 shadow-xl active:scale-95 leading-none"
                 >
-                  <Save size={14} /> Sync and Exit
+                  <Save size={14} /> Finalize Sync
                 </button>
                 <button 
                   onClick={() => { setIsDirty(false); router.back(); }}
-                  className="w-full py-4 text-[10px] font-black text-rose-500 hover:bg-rose-50 rounded-[22px] uppercase tracking-widest transition-all italic"
+                  className="w-full py-4 text-[10px] font-black text-rose-500 hover:bg-rose-50 rounded-[22px] uppercase tracking-widest transition-all italic leading-none"
                 >
-                  Discard Changes
+                  Discard Progress
                 </button>
               </div>
             </motion.div>
