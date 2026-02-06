@@ -20,7 +20,6 @@ export default function Sidebar() {
       await signOut(auth);
 
       // 2. COOKIE CLEANUP (For Middleware Security)
-      // We expire the cookies immediately so the middleware will block re-entry
       document.cookie = "session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;";
       document.cookie = "user_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;";
 
@@ -45,13 +44,24 @@ export default function Sidebar() {
   return (
     <>
       <aside className="w-64 h-full bg-white rounded-[40px] shadow-sm border border-white/50 flex flex-col overflow-hidden flex-shrink-0 text-left leading-none">
-        <div className="pt-12 pb-10 flex flex-col items-center gap-3 text-center leading-none">
-          <div className="w-10 h-10 bg-emerald-950 rounded-2xl flex items-center justify-center text-white shadow-lg rotate-3 leading-none">
-            <span className="font-light italic text-lg leading-none">C</span>
+        <div className="pt-12 pb-10 flex flex-col items-center gap-4 leading-none text-center">
+          
+          {/* CLSU LOGO: CIRCULAR & BORDERLESS */}
+          <div className="relative leading-none">
+            <div className="w-50 h-30 rounded-full flex items-center justify-center transition-transform hover:scale-110 duration-500 leading-none">
+              <img 
+                src="/img/clsu_logo.png" 
+                alt="CLSU Logo" 
+                className="w-full h-full object-contain drop-shadow-xl" 
+              />
+            </div>
+            {/* Ambient Glow behind the logo */}
+            <div className="absolute inset-0 bg-emerald-500/5 blur-2xl rounded-full -z-10" />
           </div>
+
           <div className="text-center leading-none">
             <h1 className="text-[9px] font-bold tracking-[0.4em] text-slate-300 uppercase leading-none">System Hub</h1>
-            <p className="text-xs font-semibold text-slate-800 tracking-tighter mt-1 leading-none">CLSU HMS</p>
+            <p className="text-xs font-semibold text-slate-800 tracking-tighter mt-1.5 leading-none">CLSU HMS</p>
           </div>
         </div>
 

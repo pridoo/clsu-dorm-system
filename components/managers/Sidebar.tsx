@@ -16,15 +16,9 @@ export default function ManagerSidebar() {
   const handleConfirmSignOut = async () => {
     setIsLoggingOut(true);
     try {
-      // 1. Firebase Auth Sign Out
       await signOut(auth);
-
-      // 2. COOKIE CLEANUP (Para sa Middleware)
-      // Binubura natin ang cookies sa pamamagitan ng pag-set ng expiry date sa nakaraan.
       document.cookie = "session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;";
       document.cookie = "user_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;";
-
-      // 3. Redirect to login
       router.replace('/login');
     } catch (error) {
       console.error("Error signing out: ", error);
@@ -44,14 +38,25 @@ export default function ManagerSidebar() {
 
   return (
     <>
-      <aside className="w-64 h-full bg-white rounded-[40px] shadow-sm border border-white/50 flex flex-col overflow-hidden flex-shrink-0 text-left">
-        <div className="pt-12 pb-10 flex flex-col items-center gap-3">
-          <div className="w-10 h-10 bg-emerald-600 rounded-2xl flex items-center justify-center text-white shadow-lg rotate-3 transition-transform hover:rotate-0">
-            <span className="font-light italic text-lg leading-none">M</span>
+      <aside className="w-64 h-full bg-white rounded-[40px] shadow-sm border border-white/50 flex flex-col overflow-hidden flex-shrink-0 text-left leading-none">
+        <div className="pt-12 pb-10 flex flex-col items-center gap-4 leading-none">
+          
+          {/* CLSU LOGO: CIRCULAR & BORDERLESS */}
+          <div className="relative leading-none">
+            <div className="w-50 h-30 rounded-full flex items-center justify-center transition-transform hover:scale-110 duration-500 leading-none">
+              <img 
+                src="/img/clsu_logo.png" 
+                alt="CLSU Logo" 
+                className="w-full h-full object-contain drop-shadow-xl" 
+              />
+            </div>
+            {/* Ambient Glow behind the logo */}
+            <div className="absolute inset-0 bg-emerald-500/5 blur-2xl rounded-full -z-10" />
           </div>
+
           <div className="text-center leading-none">
             <h1 className="text-[9px] font-black tracking-[0.4em] text-slate-300 uppercase italic leading-none">Manager Suite</h1>
-            <p className="text-xs font-semibold text-slate-800 tracking-tight mt-1 leading-none">CLSU HMS</p>
+            <p className="text-xs font-semibold text-slate-800 tracking-tight mt-1.5 leading-none">CLSU HMS</p>
           </div>
         </div>
 
@@ -76,7 +81,7 @@ export default function ManagerSidebar() {
           })}
         </nav>
 
-        <div className="p-6 mt-auto border-t border-slate-50">
+        <div className="p-6 mt-auto border-t border-slate-50 leading-none">
           <button 
             onClick={() => setShowLogoutModal(true)}
             className="flex items-center gap-3 px-6 py-3 w-full rounded-xl text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all group leading-none"

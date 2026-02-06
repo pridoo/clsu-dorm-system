@@ -6,7 +6,8 @@ import {
   TrendingUp, ChevronRight, PieChart, Loader2, AlertTriangle 
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { db } from '@/lib/firebase';
+import { db, auth } from '@/lib/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 import { collection, onSnapshot, query, limit, orderBy, getDoc, doc, where } from 'firebase/firestore';
 
 export default function Dashboard() {
@@ -21,13 +22,23 @@ export default function Dashboard() {
   const [activeConfig, setActiveConfig] = useState<any>(null);
 
   useEffect(() => {
-    // 1. FETCH ACTIVE SYSTEM CONFIG FIRST
+    // 1. AUTH STATE MONITORING
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        setRecentActivity([]);
+        setActiveConfig(null);
+      }
+    });
+
+    // 2. FETCH SYSTEM CONFIG WITH ERROR HANDLING
     const unsubConfig = onSnapshot(doc(db, "system", "config"), (configDoc) => {
+      if (!auth.currentUser) return;
+
       if (configDoc.exists()) {
         const configData = configDoc.data();
         setActiveConfig(configData);
 
-        // 2. TOTAL RESIDENTS (FILTERED: Active only + CURRENT PERIOD MATCH)
+        // 3. TOTAL RESIDENTS LISTENER
         const qResidents = query(
           collection(db, "residents"), 
           where("isArchived", "==", false),
@@ -36,10 +47,14 @@ export default function Dashboard() {
         );
         
         const unsubResidents = onSnapshot(qResidents, (snap) => {
+          if (!auth.currentUser) return;
           setStats(prev => ({ ...prev, totalResidents: snap.size }));
+        }, (error) => {
+          // SILENCE PERMISSION ERRORS ON LOGOUT
+          if (error.code !== 'permission-denied') console.error(error);
         });
 
-        // 3. RECENT ACTIVITY (FILTERED: Current term only)
+        // 4. RECENT ACTIVITY LISTENER
         const qAlloc = query(
           collection(db, "allocations"), 
           where("academicYear", "==", configData.academicYear),
@@ -49,26 +64,20 @@ export default function Dashboard() {
         );
 
         const unsubActivity = onSnapshot(qAlloc, async (snap) => {
+          if (!auth.currentUser) return;
           setLoadingActivity(true);
           const activityPromises = snap.docs.map(async (allocationDoc) => {
             const data = allocationDoc.data();
-            
             let residentName = "Unknown Resident";
             if (data.studentID) {
               const resSnap = await getDoc(doc(db, "residents", data.studentID));
-              if (resSnap.exists()) {
-                residentName = `${resSnap.data().first_name} ${resSnap.data().last_name}`;
-              }
+              if (resSnap.exists()) residentName = `${resSnap.data().first_name} ${resSnap.data().last_name}`;
             }
 
-            let managerName = "System";
+            let managerName = data.dormGroup ? `${data.dormGroup} Manager` : "Admin";
             if (data.assignedBy) {
               const userSnap = await getDoc(doc(db, "users", data.assignedBy));
-              if (userSnap.exists()) {
-                managerName = `${userSnap.data().first_name} ${userSnap.data().last_name}`;
-              }
-            } else {
-               managerName = data.dormGroup ? `${data.dormGroup} Manager` : "Admin";
+              if (userSnap.exists()) managerName = `${userSnap.data().first_name} ${userSnap.data().last_name}`;
             }
 
             return {
@@ -85,6 +94,9 @@ export default function Dashboard() {
           setRecentActivity(resolvedActivity);
           setStats(prev => ({ ...prev, activeAllocations: snap.size }));
           setLoadingActivity(false);
+        }, (error) => {
+          // SILENCE PERMISSION ERRORS ON LOGOUT
+          if (error.code !== 'permission-denied') console.error(error);
         });
 
         return () => {
@@ -92,37 +104,37 @@ export default function Dashboard() {
           unsubActivity();
         };
       }
+    }, (error) => {
+       if (error.code !== 'permission-denied') console.error(error);
     });
 
-    // 4. ROOMS & VACANT SLOTS (Infrastructure is constant, but occupancy is term-based)
+    // 5. ROOMS LISTENER
     const unsubRooms = onSnapshot(collection(db, "rooms"), (snap) => {
+      if (!auth.currentUser) return;
       let total = 0;
-      let occupied = 0;
-      snap.forEach(doc => {
-        total += doc.data().total_beds || 0;
-        // Occupied beds check depends on active term allocations
-      });
+      snap.forEach(doc => { total += doc.data().total_beds || 0; });
 
-      // We calculate occupied from activeAllocations instead for more accuracy per term
       setStats(prev => ({ 
         ...prev, 
         vacantSlots: total - prev.activeAllocations,
         utilization: total > 0 ? Math.round((prev.activeAllocations / total) * 100) : 0
       }));
+    }, (error) => {
+       if (error.code !== 'permission-denied') console.error(error);
     });
 
     return () => {
+      unsubAuth();
       unsubConfig();
       unsubRooms();
     };
-  }, [stats.activeAllocations]); // Re-run vacancy calculation when allocations change
+  }, [stats.activeAllocations]);
 
   return (
-    <div className="flex h-screen w-screen bg-[#f1f3f6] p-6 gap-6 overflow-hidden font-sans text-slate-900 leading-none">
+    <div className="flex h-screen w-screen bg-[#f1f3f6] p-6 gap-6 overflow-hidden font-sans text-slate-900 leading-none text-left">
       <Sidebar />
       
       <main className="flex-1 bg-[#fcfdfe] rounded-[48px] shadow-2xl border border-white flex flex-col overflow-hidden leading-none">
-        {/* Top Header */}
         <nav className="h-20 px-10 flex items-center justify-between border-b border-slate-50 flex-shrink-0 bg-white/50 backdrop-blur-md leading-none">
           <div className="flex items-center gap-4 bg-white px-4 py-2 rounded-xl border border-slate-100 shadow-sm leading-none">
             <Search size={14} className="text-slate-400" />
@@ -144,7 +156,7 @@ export default function Dashboard() {
             <div className="bg-emerald-50/50 px-6 py-3 rounded-2xl border border-emerald-100 shadow-sm flex items-center gap-3 leading-none text-right">
                <div className="text-right">
                  <p className="text-[8px] font-black text-emerald-600 uppercase tracking-widest mb-1 italic leading-none text-right">Active Sync</p>
-                 <p className="text-[10px] font-black text-emerald-950 uppercase leading-none text-right">{activeConfig?.academicYear} | {activeConfig?.semester}</p>
+                 <p className="text-[10px] font-black text-emerald-950 uppercase leading-none text-right">{activeConfig?.academicYear || '---'} | {activeConfig?.semester || '---'}</p>
                </div>
                <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.8)]" />
             </div>
@@ -212,14 +224,14 @@ export default function Dashboard() {
               <div className="space-y-10 flex-1 flex flex-col justify-center leading-none">
                  <ProgressItem label="Overall Utilization" percent={stats.utilization} color="bg-emerald-500" shadow="shadow-emerald-200" />
                  
-                 <div className="grid grid-cols-2 gap-4 leading-none">
+                 <div className="grid grid-cols-2 gap-4 leading-none text-left">
                     <div className="p-4 rounded-3xl bg-slate-50 border border-slate-100 text-left leading-none">
-                       <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1 italic leading-none">Current Assigns</p>
-                       <p className="text-xl font-black text-slate-800 italic leading-none">{stats.activeAllocations}</p>
+                       <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1 italic leading-none text-left">Current Assigns</p>
+                       <p className="text-xl font-black text-slate-800 italic leading-none text-left">{stats.activeAllocations}</p>
                     </div>
                     <div className="p-4 rounded-3xl bg-slate-50 border border-slate-100 text-left leading-none">
-                       <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1 italic leading-none">Free Slots</p>
-                       <p className="text-xl font-black text-emerald-600 italic leading-none">{stats.vacantSlots}</p>
+                       <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1 italic leading-none text-left">Free Slots</p>
+                       <p className="text-xl font-black text-emerald-600 italic leading-none text-left">{stats.vacantSlots}</p>
                     </div>
                  </div>
               </div>
