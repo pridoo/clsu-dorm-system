@@ -14,7 +14,6 @@ import { onAuthStateChanged } from 'firebase/auth';
 export default function AssignRoomPage() {
   const router = useRouter();
   
-  // Data States
   const [pendingResidents, setPendingResidents] = useState<any[]>([]);
   const [rooms, setRooms] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -22,82 +21,93 @@ export default function AssignRoomPage() {
   const [showExitModal, setShowExitModal] = useState(false);
   const [activeTerm, setActiveTerm] = useState<any>(null);
 
-  // Drag/Selection States
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        // 1. Get Manager Building and Active System Config
-        const [userDoc, configSnap] = await Promise.all([
-          getDoc(doc(db, "users", user.uid)),
-          getDoc(doc(db, "system", "config"))
-        ]);
+        try {
+          const [userDoc, configSnap] = await Promise.all([
+            getDoc(doc(db, "users", user.uid)),
+            getDoc(doc(db, "system", "config"))
+          ]);
 
-        if (userDoc.exists() && configSnap.exists()) {
-          const buildingGroup = userDoc.data().assigned_building;
-          const config = configSnap.data();
-          setActiveTerm(config);
-          
-          // 2. Fetch Rooms for this building group
-          const qRooms = query(collection(db, "rooms"), where("dormGroup", "==", buildingGroup));
-          const roomsSnap = await getDocs(qRooms);
-          const initialRooms = roomsSnap.docs.map(d => ({ 
-            db_id: d.id, 
-            ...d.data(), 
-            occupants: [] as any[] 
-          })).sort((a: any, b: any) => {
-            if (a.dormID !== b.dormID) return a.dormID.localeCompare(b.dormID);
-            return parseInt(a.room_number) - parseInt(b.room_number);
-          });
+          if (userDoc.exists() && configSnap.exists()) {
+            const buildingGroup = userDoc.data().assigned_building;
+            const config = configSnap.data();
 
-          // 3. Real-time sync for Residents (STRICT: Building + Term + Not Archived)
-          const qResidents = query(
-            collection(db, "residents"),
-            where("assigned_building", "==", buildingGroup),
-            where("isArchived", "==", false),
-            where("registered_academic_year_label", "==", config.academicYear),
-            where("registered_semester_label", "==", config.semester)
-          );
+            // SAFETY CHECK: Haharangin ang query kung walang laman ang fields
+            if (!buildingGroup || !config.academicYear || !config.semester) {
+              console.error("Missing critical sync data");
+              setLoading(false);
+              return;
+            }
 
-          const unsubData = onSnapshot(qResidents, async (resSnap) => {
-            const currentTermResidents = resSnap.docs.map(d => ({
-              id: d.id,
-              ...d.data(),
-              initial: (d.data() as any).first_name?.[0] || '?'
-            }));
-
-            // Fetch Allocations (Filtered by current term if necessary, or check map)
-            const allocSnap = await getDocs(collection(db, "allocations"));
-            const allocMap = new Map();
-            allocSnap.forEach(a => allocMap.set(a.data().studentID, a.data().roomID));
-
-            const queue: any[] = [];
-            const updatedRooms = JSON.parse(JSON.stringify(initialRooms));
-
-            currentTermResidents.forEach((res: any) => {
-              const roomId = allocMap.get(res.id);
-              if (roomId) {
-                const roomObj = updatedRooms.find((r: any) => r.db_id === roomId);
-                if (roomObj) roomObj.occupants.push(res);
-              } else {
-                queue.push(res);
-              }
+            setActiveTerm(config);
+            
+            // 1. Fetch Rooms
+            const qRooms = query(collection(db, "rooms"), where("dormGroup", "==", buildingGroup));
+            const roomsSnap = await getDocs(qRooms);
+            const initialRooms = roomsSnap.docs.map(d => ({ 
+              db_id: d.id, 
+              ...d.data(), 
+              occupants: [] as any[] 
+            })).sort((a: any, b: any) => {
+              if (a.dormID !== b.dormID) return a.dormID.localeCompare(b.dormID);
+              return parseInt(a.room_number) - parseInt(b.room_number);
             });
 
-            setPendingResidents(queue);
-            setRooms(updatedRooms);
-            setLoading(false);
-          });
-          return () => unsubData();
+            // 2. Real-time Residents Sync (STRICT PERIOD FILTER)
+            const qResidents = query(
+              collection(db, "residents"),
+              where("assigned_building", "==", buildingGroup),
+              where("isArchived", "==", false),
+              where("registered_academic_year_label", "==", config.academicYear),
+              where("registered_semester_label", "==", config.semester)
+            );
+
+            const unsubData = onSnapshot(qResidents, async (resSnap) => {
+              const currentTermResidents = resSnap.docs.map(d => ({
+                id: d.id,
+                ...d.data(),
+                initial: (d.data() as any).first_name?.[0] || '?'
+              }));
+
+              const allocSnap = await getDocs(collection(db, "allocations"));
+              const allocMap = new Map();
+              allocSnap.forEach(a => allocMap.set(a.data().studentID, a.data().roomID));
+
+              const queue: any[] = [];
+              const updatedRooms = JSON.parse(JSON.stringify(initialRooms));
+
+              currentTermResidents.forEach((res: any) => {
+                const roomId = allocMap.get(res.id);
+                if (roomId) {
+                  const roomObj = updatedRooms.find((r: any) => r.db_id === roomId);
+                  if (roomObj) roomObj.occupants.push(res);
+                } else {
+                  queue.push(res);
+                }
+              });
+
+              setPendingResidents(queue);
+              setRooms(updatedRooms);
+              setLoading(false);
+            });
+            return () => unsubData();
+          }
+        } catch (err) {
+          console.error("Data Fetch Error:", err);
+          setLoading(false);
         }
+      } else {
+        router.push('/login');
       }
     });
     return () => unsubAuth();
-  }, []);
+  }, [router]);
 
-  // Exit Guard
   useEffect(() => {
     const handleAnchorClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
@@ -124,7 +134,6 @@ export default function AssignRoomPage() {
     
     rooms.forEach(room => {
       room.occupants.forEach((occ: any) => {
-        // Unique ID per resident per term
         const allocId = `${occ.id}_${activeTerm.academicYear}_${activeTerm.semester}`.replace(/\s+/g, '');
         const allocRef = doc(db, "allocations", allocId);
         batch.set(allocRef, {
@@ -143,15 +152,14 @@ export default function AssignRoomPage() {
       await batch.commit();
       setIsDirty(false);
       setShowExitModal(false);
-      alert("Allocation Plan Synchronized! 🚀");
+      alert("Database Synchronized Successfully! 🚀");
     } catch (err: any) {
-      alert("Error saving: " + err.message);
+      alert("Error saving layout: " + err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // Drag logic
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => setMousePos({ x: e.clientX, y: e.clientY });
     if (selectedUser) window.addEventListener('mousemove', handleMouseMove);
@@ -204,6 +212,17 @@ export default function AssignRoomPage() {
     return groups;
   }, {});
 
+  if (loading && !activeTerm) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-[#f1f5f9]">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="animate-spin text-emerald-600" size={40} />
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">Engaging Allocation Engine...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen w-screen bg-[#f1f5f9] p-6 gap-6 overflow-hidden text-left font-sans cursor-default text-slate-900 leading-none">
       <Sidebar />
@@ -215,10 +234,10 @@ export default function AssignRoomPage() {
             initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}
           >
             <div className="p-4 bg-emerald-600 text-white rounded-[24px] shadow-2xl flex items-center gap-4 border-2 border-white/20 backdrop-blur-md">
-              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-[10px] font-black leading-none">{selectedUser.initial}</div>
+              <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-[10px] font-black">{selectedUser.initial}</div>
               <div className="pr-4 text-left leading-none">
-                <p className="text-[10px] font-bold leading-none uppercase">{selectedUser.first_name} {selectedUser.last_name}</p>
-                <p className="text-[8px] opacity-70 uppercase font-black tracking-tighter italic leading-none mt-1">Relocating...</p>
+                <p className="text-[10px] font-bold uppercase">{selectedUser.first_name} {selectedUser.last_name}</p>
+                <p className="text-[8px] opacity-70 uppercase font-black tracking-tighter italic mt-1">Assigning...</p>
               </div>
             </div>
           </motion.div>
@@ -241,20 +260,20 @@ export default function AssignRoomPage() {
           <div className="flex items-center gap-4 leading-none">
             <div className="flex items-center gap-8 bg-slate-50 px-8 py-3 rounded-[24px] border border-slate-200 shadow-inner leading-none">
                <div className="text-left leading-none">
-                  <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5 italic">Sync: {activeTerm?.academicYear}</p>
+                  <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1.5 italic">Term: {activeTerm?.academicYear}</p>
                   <div className="flex items-center gap-3 leading-none">
                      <span className="text-xl font-black text-slate-800 italic">{occupancyRate}%</span>
                      <div className="w-24 h-1.5 bg-slate-200 rounded-full overflow-hidden">
                         <motion.div animate={{ width: `${occupancyRate}%` }} className="h-full bg-emerald-500 rounded-full" />
                      </div>
-                     <span className="text-[10px] font-black text-emerald-600 uppercase italic leading-none">{occupiedBeds}/{totalBeds} BEDS</span>
+                     <span className="text-[10px] font-black text-emerald-600 uppercase italic">{occupiedBeds}/{totalBeds} BEDS</span>
                   </div>
                </div>
                <div className="h-8 w-[1px] bg-slate-200" />
                <button 
                 onClick={handleSaveLayout}
                 disabled={!isDirty || loading}
-                className="flex items-center gap-3 bg-emerald-950 text-white px-6 py-3 rounded-xl text-[9px] font-black uppercase tracking-[0.2em] shadow-xl shadow-emerald-950/30 hover:scale-105 active:scale-95 transition-all disabled:opacity-30 leading-none"
+                className="flex items-center gap-3 bg-emerald-950 text-white px-6 py-3 rounded-xl text-[9px] font-black uppercase tracking-[0.2em] shadow-xl hover:scale-105 active:scale-95 transition-all disabled:opacity-30 leading-none"
                >
                   {loading ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} 
                   {loading ? "Syncing..." : "Sync Layout"}
@@ -271,7 +290,7 @@ export default function AssignRoomPage() {
              <div className="flex items-center justify-between mb-8 px-2 text-left leading-none">
                 <div className="flex items-center gap-2 text-left leading-none">
                    <div className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                   <p className="text-[10px] font-black text-slate-900 uppercase tracking-widest italic">Pending Residents</p>
+                   <p className="text-[10px] font-black text-slate-900 uppercase tracking-widest italic leading-none">Pending Term Residents</p>
                 </div>
                 <Users size={14} className="text-slate-300" />
              </div>
@@ -289,9 +308,9 @@ export default function AssignRoomPage() {
                       <div className={`w-9 h-9 rounded-2xl flex items-center justify-center text-[11px] font-black leading-none ${selectedUser?.id === student.id ? 'bg-emerald-500 text-white' : 'bg-slate-50 text-slate-400'}`}>
                         {student.initial}
                       </div>
-                      <div className="text-left flex-1 leading-none">
-                        <p className="text-xs font-bold text-slate-800 leading-none mb-1 uppercase">{student.first_name} {student.last_name}</p>
-                        <p className="text-[9px] font-black text-slate-300 uppercase italic leading-none">{student.course} • {student.year_level}</p>
+                      <div className="text-left flex-1 leading-none text-left">
+                        <p className="text-xs font-bold text-slate-800 leading-none mb-1 uppercase text-left">{student.first_name} {student.last_name}</p>
+                        <p className="text-[9px] font-black text-slate-300 uppercase italic leading-none text-left">{student.course} • {student.year_level}</p>
                       </div>
                     </motion.div>
                   ))}
@@ -299,21 +318,21 @@ export default function AssignRoomPage() {
              </div>
 
              <div className="mt-8 p-5 bg-emerald-50/50 rounded-[32px] border border-emerald-100/50 leading-none text-left">
-                <p className="text-[9px] font-black text-emerald-800 uppercase tracking-widest leading-none italic mb-2">Smart Assist</p>
+                <p className="text-[9px] font-black text-emerald-800 uppercase tracking-widest mb-2 italic text-left">Smart Assist</p>
                 <p className="text-[10px] text-emerald-700/60 font-medium italic leading-relaxed text-left">
-                  {selectedUser ? "Click here to return resident to queue." : "Select a resident and click a room slot."}
+                  {selectedUser ? "Click here to return resident to queue." : "Click a resident to start room placement."}
                 </p>
              </div>
           </aside>
 
           <div className="flex-1 p-12 overflow-y-auto internal-scroll relative text-left leading-none">
-              <div className="max-w-6xl mx-auto space-y-20 leading-none">
+              <div className="max-w-6xl mx-auto space-y-20 leading-none text-left">
                 {Object.keys(groupedRooms).map((dormId) => (
                   <div key={dormId} className="space-y-8 leading-none text-left">
                     <div className="flex items-center gap-6 leading-none">
                       <div className="flex items-center gap-3 leading-none">
                         <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.4)]" />
-                        <h2 className="text-lg font-black uppercase tracking-[0.4em] text-[#022c22] italic leading-none">{dormId} Building</h2>
+                        <h2 className="text-lg font-black uppercase tracking-[0.4em] text-[#022c22] italic leading-none">{dormId} Block</h2>
                       </div>
                       <div className="h-[1px] flex-1 bg-slate-200" />
                     </div>
@@ -328,7 +347,7 @@ export default function AssignRoomPage() {
                           }`}
                         >
                           <div className="text-center mb-8 leading-none">
-                            <p className="text-[16px] font-black uppercase tracking-[0.1em] text-slate-800 italic leading-none">Room {room.room_number}</p>
+                            <p className="text-[16px] font-black uppercase tracking-[0.1em] text-slate-800 italic leading-none text-center">Room {room.room_number}</p>
                           </div>
 
                           <div className="grid grid-cols-4 gap-4 relative z-10 leading-none">
@@ -342,7 +361,7 @@ export default function AssignRoomPage() {
                                       occupant ? 'bg-[#022c22] border-emerald-800 shadow-xl scale-105 cursor-pointer hover:bg-emerald-900' : 'border-slate-400 border-dashed bg-slate-100/50'
                                     }`}
                                   >
-                                    {occupant ? <span className="text-white font-black italic text-sm leading-none">{occupant.initial}</span> : <div className="w-1.5 h-1.5 rounded-full bg-slate-400/50" />}
+                                    {occupant ? <span className="text-white font-black italic text-sm leading-none">{occupant.initial}</span> : <div className="w-1.5 h-1.5 rounded-full bg-slate-400/50 leading-none" />}
                                   </div>
                                 </div>
                               );
@@ -351,7 +370,7 @@ export default function AssignRoomPage() {
                           
                           <div className="absolute bottom-6 flex items-center gap-2 px-5 py-2 bg-white border border-slate-200 rounded-full shadow-sm leading-none">
                             <div className={`w-1.5 h-1.5 rounded-full leading-none ${room.occupants.length === (room.total_beds || 8) ? 'bg-rose-500 animate-pulse' : 'bg-emerald-500'}`} />
-                            <p className="text-[9px] font-black text-slate-800 uppercase tracking-widest leading-none">{room.occupants.length}/{room.total_beds || 8} OCCUPANCY</p>
+                            <p className="text-[9px] font-black text-slate-800 uppercase tracking-widest leading-none">{room.occupants.length}/{room.total_beds || 8} Occupants</p>
                           </div>
                         </div>
                       ))}
@@ -377,9 +396,9 @@ export default function AssignRoomPage() {
               <div className="w-20 h-20 bg-amber-50 rounded-[30px] flex items-center justify-center text-amber-500 mx-auto mb-6 shadow-inner leading-none">
                 <AlertTriangle size={40} />
               </div>
-              <h2 className="text-2xl font-bold text-slate-900 tracking-tight italic mb-2 leading-none">Save Changes?</h2>
+              <h2 className="text-2xl font-bold text-slate-900 tracking-tight italic mb-2 leading-none">Unsaved Changes</h2>
               <p className="text-[11px] text-slate-400 font-medium leading-relaxed mb-10 px-4 text-center">
-                Unsaved room assignments will be lost. Term context: {activeTerm?.academicYear}.
+                Moving away will reset the current room layout. Confirm synchronization before exiting.
               </p>
               <div className="space-y-3 text-center leading-none">
                 <button 

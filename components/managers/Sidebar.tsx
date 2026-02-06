@@ -16,8 +16,16 @@ export default function ManagerSidebar() {
   const handleConfirmSignOut = async () => {
     setIsLoggingOut(true);
     try {
+      // 1. Firebase Auth Sign Out
       await signOut(auth);
-      router.push('/login');
+
+      // 2. COOKIE CLEANUP (Para sa Middleware)
+      // Binubura natin ang cookies sa pamamagitan ng pag-set ng expiry date sa nakaraan.
+      document.cookie = "session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;";
+      document.cookie = "user_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 UTC;";
+
+      // 3. Redirect to login
+      router.replace('/login');
     } catch (error) {
       console.error("Error signing out: ", error);
       alert("Hindi makapag-logout. Subukan muli.");
@@ -39,11 +47,11 @@ export default function ManagerSidebar() {
       <aside className="w-64 h-full bg-white rounded-[40px] shadow-sm border border-white/50 flex flex-col overflow-hidden flex-shrink-0 text-left">
         <div className="pt-12 pb-10 flex flex-col items-center gap-3">
           <div className="w-10 h-10 bg-emerald-600 rounded-2xl flex items-center justify-center text-white shadow-lg rotate-3 transition-transform hover:rotate-0">
-            <span className="font-light italic text-lg">M</span>
+            <span className="font-light italic text-lg leading-none">M</span>
           </div>
-          <div className="text-center">
-            <h1 className="text-[9px] font-black tracking-[0.4em] text-slate-300 uppercase italic">Manager Suite</h1>
-            <p className="text-xs font-semibold text-slate-800 tracking-tight leading-none mt-1">CLSU HMS</p>
+          <div className="text-center leading-none">
+            <h1 className="text-[9px] font-black tracking-[0.4em] text-slate-300 uppercase italic leading-none">Manager Suite</h1>
+            <p className="text-xs font-semibold text-slate-800 tracking-tight mt-1 leading-none">CLSU HMS</p>
           </div>
         </div>
 
@@ -59,10 +67,10 @@ export default function ManagerSidebar() {
                 {isActive && (
                   <motion.div layoutId="nav-bg" className="absolute inset-0 bg-emerald-50 border border-emerald-100/50 rounded-2xl -z-10" />
                 )}
-                <span className={isActive ? 'scale-110' : 'opacity-70 group-hover:opacity-100 transition-all'}>
+                <span className={isActive ? 'scale-110 leading-none' : 'opacity-70 group-hover:opacity-100 transition-all leading-none'}>
                   {item.icon}
                 </span>
-                <span className="text-[11px] uppercase tracking-wider font-bold">{item.name}</span>
+                <span className="text-[11px] uppercase tracking-wider font-bold leading-none">{item.name}</span>
               </Link>
             );
           })}
@@ -71,10 +79,10 @@ export default function ManagerSidebar() {
         <div className="p-6 mt-auto border-t border-slate-50">
           <button 
             onClick={() => setShowLogoutModal(true)}
-            className="flex items-center gap-3 px-6 py-3 w-full rounded-xl text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all group"
+            className="flex items-center gap-3 px-6 py-3 w-full rounded-xl text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all group leading-none"
           >
             <LogOut size={16} className="group-hover:-translate-x-1 transition-transform" />
-            <span className="text-[10px] font-black uppercase tracking-widest">Sign Out</span>
+            <span className="text-[10px] font-black uppercase tracking-widest leading-none">Sign Out</span>
           </button>
         </div>
       </aside>
@@ -82,7 +90,7 @@ export default function ManagerSidebar() {
       {/* LOGOUT CONFIRMATION MODAL */}
       <AnimatePresence>
         {showLogoutModal && (
-          <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 leading-none text-left">
             <motion.div 
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={() => !isLoggingOut && setShowLogoutModal(false)}
@@ -91,31 +99,31 @@ export default function ManagerSidebar() {
             
             <motion.div 
               initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative bg-white w-full max-w-sm rounded-[40px] shadow-2xl overflow-hidden p-10 text-center border border-white/20"
+              className="relative bg-white w-full max-w-sm rounded-[40px] shadow-2xl overflow-hidden p-10 text-center border border-white/20 leading-none"
             >
-              <div className="w-20 h-20 bg-rose-50 rounded-[30px] flex items-center justify-center text-rose-500 mx-auto mb-6 shadow-inner">
+              <div className="w-20 h-20 bg-rose-50 rounded-[30px] flex items-center justify-center text-rose-500 mx-auto mb-6 shadow-inner leading-none">
                 <AlertCircle size={40} />
               </div>
               
-              <h2 className="text-2xl font-semibold text-slate-900 tracking-tight mb-2 italic">End Session?</h2>
-              <p className="text-[11px] text-slate-400 font-medium leading-relaxed mb-10 px-4">
-                You are about to sign out of the Manager Control Suite. Make sure all registry updates are saved.
+              <h2 className="text-2xl font-semibold text-slate-900 tracking-tight mb-2 italic leading-none text-center">End Session?</h2>
+              <p className="text-[11px] text-slate-400 font-medium leading-relaxed mb-10 px-4 text-center leading-normal">
+                You are about to sign out of the Manager Control Suite. Make sure all registry updates are synchronized.
               </p>
 
               <div className="space-y-3">
                 <button 
                   onClick={handleConfirmSignOut}
                   disabled={isLoggingOut}
-                  className="w-full bg-emerald-950 text-white py-4 rounded-[22px] font-bold text-[10px] uppercase tracking-[0.2em] hover:bg-emerald-900 transition-all shadow-xl active:scale-95 disabled:opacity-50"
+                  className="w-full bg-emerald-950 text-white py-4 rounded-[22px] font-bold text-[10px] uppercase tracking-[0.2em] hover:bg-emerald-900 transition-all shadow-xl active:scale-95 disabled:opacity-50 flex items-center justify-center leading-none"
                 >
-                  {isLoggingOut ? "Signing out..." : "Confirm Sign Out"}
+                  {isLoggingOut ? "SIGNING OUT..." : "CONFIRM SIGN OUT"}
                 </button>
                 <button 
                   onClick={() => setShowLogoutModal(false)}
                   disabled={isLoggingOut}
-                  className="w-full py-4 text-[10px] font-black text-slate-300 hover:text-slate-500 uppercase tracking-widest transition-colors"
+                  className="w-full py-4 text-[10px] font-black text-slate-300 hover:text-slate-500 uppercase tracking-widest transition-colors leading-none"
                 >
-                  Go Back
+                  GO BACK
                 </button>
               </div>
             </motion.div>
