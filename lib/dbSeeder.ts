@@ -119,7 +119,7 @@ export const seedDatabase = async () => {
       }
     }
 
-    // Wait for all 190 rooms to be created before moving to allocation
+
     await Promise.all(roomPromises);
     console.log("✅ Rooms Created.");
 
